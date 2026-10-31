@@ -232,7 +232,7 @@ $existingMedia = media_load_for_project($id);
             Project Link
         </label>
 
-        <div class="input-with-plus">
+        <div class="input-with-plus has-folder">
 
             <input
                 type="text"
@@ -249,9 +249,17 @@ $existingMedia = media_load_for_project($id);
                 type="button"
                 class="input-plus"
                 id="media_add"
-                title="Add photos, videos or PDFs"
+                title="Add photos, videos, PDFs or a ZIP"
                 aria-label="Add photos, videos or PDFs"
             >+</button>
+
+            <button
+                type="button"
+                class="input-plus input-folder"
+                id="folder_add"
+                title="Add a whole folder"
+                aria-label="Add a folder"
+            ><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg></button>
 
         </div>
 
@@ -259,14 +267,22 @@ $existingMedia = media_load_for_project($id);
             type="file"
             name="media[]"
             id="media_input"
-            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf"
+            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf,application/zip,.zip"
+            multiple
+            hidden
+        >
+
+        <input
+            type="file"
+            id="folder_input"
+            webkitdirectory
             multiple
             hidden
         >
 
         <small class="form-hint">
             Optional. If you add a link, a live preview of it is shown on your portfolio.
-            Use the + button to attach photos, videos or PDFs (up to 10 files, 25 MB each).
+            Use the + button to attach photos, videos, PDFs or a ZIP, or the folder button to add a folder: photos, videos and PDFs are added as they are, and code is packed into one ZIP download (up to 10 files, 25 MB each).
         </small>
 
         <?php if (count($existingMedia) > 0): ?>
@@ -297,6 +313,10 @@ $existingMedia = media_load_for_project($id);
                                 muted
                                 preload="metadata"
                             ></video>
+
+                        <?php elseif ($media["file_type"] === "archive"): ?>
+
+                            <div class="media-doc">ZIP</div>
 
                         <?php else: ?>
 
@@ -358,6 +378,19 @@ $existingMedia = media_load_for_project($id);
                             preload="metadata"
                         ></video>
                     </div>
+
+                <?php elseif ($media["file_type"] === "archive"): ?>
+
+                    <a
+                        class="media-item media-zip"
+                        data-id="<?= (int) $media["id"] ?>"
+                        href="<?= htmlspecialchars($mediaUrl) ?>"
+                        download="<?= htmlspecialchars($media["original_name"]) ?>"
+                    >
+                        <strong>ZIP</strong>
+                        <span><?= htmlspecialchars($media["original_name"]) ?></span>
+                        <em>Download code</em>
+                    </a>
 
                 <?php else: ?>
 
@@ -554,7 +587,7 @@ $existingMedia = media_load_for_project($id);
 
                 thumb = document.createElement("div");
                 thumb.className = "media-doc";
-                thumb.textContent = "PDF";
+                thumb.textContent = isZip(file) ? "ZIP" : "PDF";
             }
 
             var name = document.createElement("span");
@@ -619,6 +652,23 @@ $existingMedia = media_load_for_project($id);
                 video.preload = "metadata";
                 box.appendChild(video);
 
+            } else if (isZip(file)) {
+
+                box.className = "media-item media-zip";
+
+                var zipName = document.createElement("strong");
+                zipName.textContent = "ZIP";
+
+                var zipLabel = document.createElement("span");
+                zipLabel.textContent = file.name;
+
+                var zipNote = document.createElement("em");
+                zipNote.textContent = "Download code";
+
+                box.appendChild(zipName);
+                box.appendChild(zipLabel);
+                box.appendChild(zipNote);
+
             } else {
 
                 box.className = "media-item media-pdf";
@@ -639,11 +689,157 @@ $existingMedia = media_load_for_project($id);
         input.click();
     });
 
-    input.addEventListener("change", function () {
+    // ---- ZIP support: a code folder is packed into one .zip in the browser ----
+
+    var ZIP_TYPES = ["application/zip", "application/x-zip-compressed"];
+
+    function isZip(file) {
+        return ZIP_TYPES.indexOf(file.type) !== -1 || /\.zip$/i.test(file.name);
+    }
+
+    var crcTable = (function () {
+
+        var table = [], c, n, k;
+
+        for (n = 0; n < 256; n++) {
+
+            c = n;
+
+            for (k = 0; k < 8; k++) {
+                c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            }
+
+            table[n] = c >>> 0;
+        }
+
+        return table;
+    })();
+
+    function crc32(bytes) {
+
+        var c = 0xFFFFFFFF;
+
+        for (var i = 0; i < bytes.length; i++) {
+            c = crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+        }
+
+        return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    // entries: [{ name: "folder/file.php", data: Uint8Array }]  (stored, not compressed)
+    function buildZip(entries) {
+
+        var encoder = new TextEncoder();
+        var parts = [];
+        var central = [];
+        var offset = 0;
+        var centralSize = 0;
+
+        entries.forEach(function (entry) {
+
+            var nameBytes = encoder.encode(entry.name);
+            var crc = crc32(entry.data);
+            var size = entry.data.length;
+
+            var local = new Uint8Array(30 + nameBytes.length);
+            var lv = new DataView(local.buffer);
+
+            lv.setUint32(0, 0x04034b50, true);
+            lv.setUint16(4, 20, true);
+            lv.setUint16(6, 0x0800, true);
+            lv.setUint16(8, 0, true);
+            lv.setUint16(10, 0, true);
+            lv.setUint16(12, 0x21, true);
+            lv.setUint32(14, crc, true);
+            lv.setUint32(18, size, true);
+            lv.setUint32(22, size, true);
+            lv.setUint16(26, nameBytes.length, true);
+            lv.setUint16(28, 0, true);
+            local.set(nameBytes, 30);
+
+            var head = new Uint8Array(46 + nameBytes.length);
+            var hv = new DataView(head.buffer);
+
+            hv.setUint32(0, 0x02014b50, true);
+            hv.setUint16(4, 20, true);
+            hv.setUint16(6, 20, true);
+            hv.setUint16(8, 0x0800, true);
+            hv.setUint16(10, 0, true);
+            hv.setUint16(12, 0, true);
+            hv.setUint16(14, 0x21, true);
+            hv.setUint32(16, crc, true);
+            hv.setUint32(20, size, true);
+            hv.setUint32(24, size, true);
+            hv.setUint16(28, nameBytes.length, true);
+            hv.setUint16(30, 0, true);
+            hv.setUint16(32, 0, true);
+            hv.setUint16(34, 0, true);
+            hv.setUint16(36, 0, true);
+            hv.setUint32(38, 0, true);
+            hv.setUint32(42, offset, true);
+            head.set(nameBytes, 46);
+
+            parts.push(local, entry.data);
+            central.push(head);
+
+            offset += local.length + size;
+            centralSize += head.length;
+        });
+
+        var end = new Uint8Array(22);
+        var ev = new DataView(end.buffer);
+
+        ev.setUint32(0, 0x06054b50, true);
+        ev.setUint16(4, 0, true);
+        ev.setUint16(6, 0, true);
+        ev.setUint16(8, entries.length, true);
+        ev.setUint16(10, entries.length, true);
+        ev.setUint32(12, centralSize, true);
+        ev.setUint32(16, offset, true);
+        ev.setUint16(20, 0, true);
+
+        return new Blob(parts.concat(central, [end]), { type: "application/zip" });
+    }
+
+    // packs a chosen folder into one File called "<folder name>.zip"
+    function zipFolder(files) {
+
+        var total = files.reduce(function (sum, f) { return sum + f.size; }, 0);
+
+        if (total > MAX_BYTES) {
+            alert("That folder is larger than 25 MB, so it can't be added as a ZIP.");
+            return Promise.resolve(null);
+        }
+
+        return Promise.all(files.map(function (f) {
+            return f.arrayBuffer().then(function (buffer) {
+                return { name: f.webkitRelativePath || f.name, data: new Uint8Array(buffer) };
+            });
+        })).then(function (entries) {
+
+            var root = (files[0].webkitRelativePath || "folder").split("/")[0] || "folder";
+
+            return new File([buildZip(entries)], root + ".zip", {
+                type: "application/zip",
+                lastModified: Date.now()
+            });
+        });
+    }
+
+    var folderInput = document.getElementById("folder_input");
+    var folderButton = document.getElementById("folder_add");
+
+    var SUPPORTED = [
+        "image/jpeg", "image/png", "image/gif", "image/webp",
+        "video/mp4", "video/webm", "application/pdf"
+    ].concat(ZIP_TYPES);
+
+    // adds files to the list, skipping duplicates and anything too big or over the limit
+    function addFiles(files) {
 
         var problem = "";
 
-        Array.prototype.forEach.call(input.files, function (file) {
+        Array.prototype.forEach.call(files, function (file) {
 
             var duplicate = Array.prototype.some.call(chosen.files, function (c) {
                 return sameFile(c, file);
@@ -668,6 +864,62 @@ $existingMedia = media_load_for_project($id);
         if (problem !== "") {
             alert(problem);
         }
+    }
+
+    input.addEventListener("change", function () {
+        addFiles(input.files);
+    });
+
+    folderButton.addEventListener("click", function () {
+        folderInput.click();
+    });
+
+    // a chosen folder: photos/videos/PDFs are added as they are,
+    // code or other files are packed into one ZIP download
+    folderInput.addEventListener("change", function () {
+
+        var all = Array.prototype.slice.call(folderInput.files);
+
+        folderInput.value = "";
+
+        var files = all.filter(function (f) {
+            return !/(^|\/)(\.git|node_modules)\//.test(f.webkitRelativePath || f.name);
+        });
+
+        if (files.length === 0) {
+            alert("That folder is empty.");
+            return;
+        }
+
+        var media = files.filter(function (f) {
+            return SUPPORTED.indexOf(f.type) !== -1;
+        });
+
+        var asZip = false;
+
+        if (media.length === 0) {
+
+            asZip = true;
+
+        } else if (media.length < files.length) {
+
+            asZip = confirm(
+                "This folder has other files besides photos, videos and PDFs.\n\n" +
+                "OK = add the whole folder as one ZIP download\n" +
+                "Cancel = add only the photos, videos and PDFs"
+            );
+        }
+
+        if (!asZip) {
+            addFiles(media);
+            return;
+        }
+
+        zipFolder(files).then(function (zipFile) {
+            if (zipFile) {
+                addFiles([zipFile]);
+            }
+        });
     });
 
 })();

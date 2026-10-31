@@ -1,0 +1,106 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    font-family: Arial, sans-serif;
+    background: #f4f6f9;
+}
+
+container {
+    width: 90%;
+    max-width: 1000px;
+    margin: 40px auto;
+}
+
+h1 {
+    margin-top: 0;
+}
+
+.subtitle {
+    color: aqua;
+    margin-bottom: 25px;
+}
+
+.card {
+    background: white;
+    padding: 25px;
+    margin-bottom: 25px;
+    border-radius: 10px;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0);
+}
+
+form {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+input {
+    padding: 12px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    font-weight: 15px;
+    flex: 1;
+}
+
+label {
+    width: 100%;
+    font-weight: bold;
+    margin-top: 10px;
+
+}
+
+.btn {
+    display: inline-block;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 6px;
+    text-decoration: none;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+.add {
+    background-color: beige;
+    color: white;
+}
+
+.edit {
+    background-color: aquamarine;
+    color: white;
+}
+
+.delete {
+    background-color: aqua;
+    color: white;
+}
+
+.cancel {
+    background-color: rgb(98, 0, 255);
+    color: white;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 15px;
+    text-align: left;
+}
+
+th {
+    background-color: burlywood;
+    color: white;
+}
+
+tr.hover {
+    background: #0000;
+}
+
+@media (max-width: 700px) {
+    table {
+        font-size: 13px;
+    }
+}

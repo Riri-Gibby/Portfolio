@@ -11,7 +11,41 @@ if (!isset($_SESSION["admin_id"])) {
 
 require_once "../db.php";
 
+$id = filter_input(
+    INPUT_GET,
+    "id",
+    FILTER_VALIDATE_INT
+);
+
+if (!$id) {
+    header("Location: dashboard.php");
+    exit;
+}
+
+
+$stmt = $conn->prepare(
+    "SELECT * FROM projects WHERE id = ?"
+);
+
+$stmt->bind_param("i", $id);
+
+$stmt->execute();
+
+$result = $stmt->get_result();
+
+$project = $result->fetch_assoc();
+
+$stmt->close();
+
+
+if (!$project) {
+    header("Location: dashboard.php");
+    exit;
+}
+
+
 $error = "";
+
 
 if ($_SERVER["REQUEST_METHOD"] === "POST") {
 
@@ -24,6 +58,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     if ($project_link !== "" && !preg_match('#^https?://#i', $project_link)) {
         $project_link = "http://" . $project_link;
     }
+
 
     // photos / videos / PDFs added with the + button
     if (empty($_POST) && !empty($_SERVER["CONTENT_LENGTH"])) {
@@ -50,33 +85,42 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     } else {
 
         $stmt = $conn->prepare(
-            "INSERT INTO projects
-            (title, description, technologies, project_link)
-            VALUES (?, ?, ?, ?)"
+            "UPDATE projects
+             SET title = ?,
+                 description = ?,
+                 technologies = ?,
+                 project_link = ?
+             WHERE id = ?"
         );
 
         if ($stmt) {
 
             $stmt->bind_param(
-                "ssss",
+                "ssssi",
                 $title,
                 $description,
                 $technologies,
-                $project_link
+                $project_link,
+                $id
             );
 
             if ($stmt->execute()) {
 
-                $newProjectId = (int) $conn->insert_id;
+                // files removed with the x button, then new files
+                $removeIds = $_POST["remove_media"] ?? [];
 
-                media_save($newProjectId, $_FILES["media"] ?? null);
+                if (is_array($removeIds)) {
+                    media_delete_items($id, $removeIds);
+                }
+
+                media_save($id, $_FILES["media"] ?? null);
 
                 header("Location: dashboard.php");
                 exit;
 
             } else {
 
-                $error = "Unable to add the project.";
+                $error = "Unable to update the project.";
             }
 
             $stmt->close();
@@ -88,20 +132,8 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
     }
 }
 
-// Projects that are already on the portfolio
-$existingProjects = [];
-
-$existingResult = $conn->query(
-    "SELECT title, technologies, project_link
-     FROM projects
-     ORDER BY created_at DESC"
-);
-
-if ($existingResult) {
-    while ($row = $existingResult->fetch_assoc()) {
-        $existingProjects[] = $row;
-    }
-}
+// Files already attached to this project
+$existingMedia = media_load_for_project($id);
 
 ?>
 
@@ -115,7 +147,7 @@ if ($existingResult) {
     <meta name="viewport"
           content="width=device-width, initial-scale=1.0">
 
-    <title>Add Project</title>
+    <title>Edit Project</title>
 
     <link rel="stylesheet" href="../style.css?v=<?= filemtime(__DIR__ . '/../style.css') ?>">
 
@@ -128,7 +160,7 @@ if ($existingResult) {
 <header class="admin-navbar">
 
     <h2>
-        Add Project
+        Edit Project
     </h2>
 
     <a href="dashboard.php">
@@ -141,7 +173,7 @@ if ($existingResult) {
 <main class="form-container">
 
     <h1>
-        Add New Project
+        Edit Project
     </h1>
 
 
@@ -163,7 +195,9 @@ if ($existingResult) {
         <input
             type="text"
             name="title"
-            placeholder="Project title"
+            value="<?= htmlspecialchars(
+                $project["title"]
+            ) ?>"
             required
         >
 
@@ -175,9 +209,10 @@ if ($existingResult) {
         <textarea
             name="description"
             rows="6"
-            placeholder="Project description"
             required
-        ></textarea>
+        ><?= htmlspecialchars(
+            $project["description"]
+        ) ?></textarea>
 
 
         <label>
@@ -187,7 +222,9 @@ if ($existingResult) {
         <input
             type="text"
             name="technologies"
-            placeholder="HTML, CSS, PHP"
+            value="<?= htmlspecialchars(
+                $project["technologies"]
+            ) ?>"
         >
 
 
@@ -195,13 +232,16 @@ if ($existingResult) {
             Project Link
         </label>
 
-        <div class="input-with-plus">
+        <div class="input-with-plus has-folder">
 
             <input
                 type="text"
                 name="project_link"
                 id="project_link"
                 placeholder="http://localhost/my-project or https://example.com"
+                value="<?= htmlspecialchars(
+                    $project["project_link"] ?? ""
+                ) ?>"
                 autocomplete="off"
             >
 
@@ -209,9 +249,17 @@ if ($existingResult) {
                 type="button"
                 class="input-plus"
                 id="media_add"
-                title="Add photos, videos or PDFs"
+                title="Add photos, videos, PDFs or a ZIP"
                 aria-label="Add photos, videos or PDFs"
             >+</button>
+
+            <button
+                type="button"
+                class="input-plus input-folder"
+                id="folder_add"
+                title="Add a whole folder"
+                aria-label="Add a folder"
+            ><svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M10 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2z"/></svg></button>
 
         </div>
 
@@ -219,15 +267,80 @@ if ($existingResult) {
             type="file"
             name="media[]"
             id="media_input"
-            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf"
+            accept="image/jpeg,image/png,image/gif,image/webp,video/mp4,video/webm,application/pdf,application/zip,.zip"
+            multiple
+            hidden
+        >
+
+        <input
+            type="file"
+            id="folder_input"
+            webkitdirectory
             multiple
             hidden
         >
 
         <small class="form-hint">
             Optional. If you add a link, a live preview of it is shown on your portfolio.
-            Use the + button to attach photos, videos or PDFs (up to 10 files, 25 MB each).
+            Use the + button to attach photos, videos, PDFs or a ZIP, or the folder button to add a folder: photos, videos and PDFs are added as they are, and code is packed into one ZIP download (up to 10 files, 25 MB each).
         </small>
+
+        <?php if (count($existingMedia) > 0): ?>
+
+            <small class="form-hint">
+                Files already on this project. Press &times; to remove one when you update.
+            </small>
+
+            <div class="media-previews" id="media_existing">
+
+                <?php foreach ($existingMedia as $media): ?>
+
+                    <?php $mediaUrl = "../" . media_url($media["file_name"]); ?>
+
+                    <div class="media-preview" data-id="<?= (int) $media["id"] ?>">
+
+                        <?php if ($media["file_type"] === "image"): ?>
+
+                            <img
+                                src="<?= htmlspecialchars($mediaUrl) ?>"
+                                alt="<?= htmlspecialchars($media["original_name"]) ?>"
+                            >
+
+                        <?php elseif ($media["file_type"] === "video"): ?>
+
+                            <video
+                                src="<?= htmlspecialchars($mediaUrl) ?>"
+                                muted
+                                preload="metadata"
+                            ></video>
+
+                        <?php elseif ($media["file_type"] === "archive"): ?>
+
+                            <div class="media-doc">ZIP</div>
+
+                        <?php else: ?>
+
+                            <div class="media-doc">PDF</div>
+
+                        <?php endif; ?>
+
+                        <span class="media-name">
+                            <?= htmlspecialchars($media["original_name"]) ?>
+                        </span>
+
+                        <button
+                            type="button"
+                            class="media-remove"
+                            aria-label="Remove <?= htmlspecialchars($media["original_name"]) ?>"
+                        >&times;</button>
+
+                    </div>
+
+                <?php endforeach; ?>
+
+            </div>
+
+        <?php endif; ?>
 
         <div class="media-previews" id="media_previews"></div>
 
@@ -241,7 +354,57 @@ if ($existingResult) {
             id="link-preview"
         ></div>
 
-        <div class="project-media" id="media_front"></div>
+        <div class="project-media" id="media_front">
+
+            <?php foreach ($existingMedia as $media): ?>
+
+                <?php $mediaUrl = "../" . media_url($media["file_name"]); ?>
+
+                <?php if ($media["file_type"] === "image"): ?>
+
+                    <div class="media-item" data-id="<?= (int) $media["id"] ?>">
+                        <img
+                            src="<?= htmlspecialchars($mediaUrl) ?>"
+                            alt="<?= htmlspecialchars($media["original_name"]) ?>"
+                        >
+                    </div>
+
+                <?php elseif ($media["file_type"] === "video"): ?>
+
+                    <div class="media-item media-video" data-id="<?= (int) $media["id"] ?>">
+                        <video
+                            src="<?= htmlspecialchars($mediaUrl) ?>"
+                            controls
+                            preload="metadata"
+                        ></video>
+                    </div>
+
+                <?php elseif ($media["file_type"] === "archive"): ?>
+
+                    <a
+                        class="media-item media-zip"
+                        data-id="<?= (int) $media["id"] ?>"
+                        href="<?= htmlspecialchars($mediaUrl) ?>"
+                        download="<?= htmlspecialchars($media["original_name"]) ?>"
+                    >
+                        <span><?= htmlspecialchars(preg_replace('/\.zip$/i', '', $media["original_name"])) ?></span>
+                        <em>Download code</em>
+                    </a>
+
+                <?php else: ?>
+
+                    <div class="media-item media-pdf" data-id="<?= (int) $media["id"] ?>">
+                        <iframe
+                            src="<?= htmlspecialchars($mediaUrl) ?>#toolbar=0&navpanes=0&view=FitH"
+                            title="<?= htmlspecialchars($media["original_name"]) ?>"
+                        ></iframe>
+                    </div>
+
+                <?php endif; ?>
+
+            <?php endforeach; ?>
+
+        </div>
 
         <small class="form-hint">
             Some websites don't allow being shown inside another page, so their preview may stay blank.
@@ -253,75 +416,12 @@ if ($existingResult) {
             type="submit"
             class="btn"
         >
-            Add Project
+            Update Project
         </button>
 
     </form>
 
 </main>
-
-
-<section class="existing-projects">
-
-    <h2>
-        Projects Already Added
-    </h2>
-
-    <?php if (count($existingProjects) > 0): ?>
-
-        <div class="existing-grid">
-
-            <?php foreach ($existingProjects as $project): ?>
-
-                <div class="existing-card">
-
-                    <?php if (!empty($project["project_link"])): ?>
-
-                        <div class="project-preview project-preview-live">
-                            <iframe
-                                src="<?= htmlspecialchars($project["project_link"]) ?>"
-                                title="Preview of <?= htmlspecialchars($project["title"]) ?>"
-                                loading="lazy"
-                                tabindex="-1"
-                                scrolling="no"
-                            ></iframe>
-                        </div>
-
-                    <?php else: ?>
-
-                        <div class="project-preview preview-empty">
-                            No link added
-                        </div>
-
-                    <?php endif; ?>
-
-                    <h3>
-                        <?= htmlspecialchars($project["title"]) ?>
-                    </h3>
-
-                    <?php if (!empty($project["technologies"])): ?>
-
-                        <span class="tag">
-                            <?= htmlspecialchars($project["technologies"]) ?>
-                        </span>
-
-                    <?php endif; ?>
-
-                </div>
-
-            <?php endforeach; ?>
-
-        </div>
-
-    <?php else: ?>
-
-        <p class="existing-empty">
-            No projects added yet. Your first one will appear here.
-        </p>
-
-    <?php endif; ?>
-
-</section>
 
 
 <script>
@@ -420,6 +520,7 @@ if ($existingResult) {
     // runs when files are added or removed
     document.addEventListener("mediachange", update);
 
+    // show the preview of the saved link right away
     update();
 
 })();
@@ -485,7 +586,7 @@ if ($existingResult) {
 
                 thumb = document.createElement("div");
                 thumb.className = "media-doc";
-                thumb.textContent = "PDF";
+                thumb.textContent = isZip(file) ? "ZIP" : "PDF";
             }
 
             var name = document.createElement("span");
@@ -550,6 +651,19 @@ if ($existingResult) {
                 video.preload = "metadata";
                 box.appendChild(video);
 
+            } else if (isZip(file)) {
+
+                box.className = "media-item media-zip";
+
+                var zipLabel = document.createElement("span");
+                zipLabel.textContent = file.name.replace(/\.zip$/i, "");
+
+                var zipNote = document.createElement("em");
+                zipNote.textContent = "Download code";
+
+                box.appendChild(zipLabel);
+                box.appendChild(zipNote);
+
             } else {
 
                 box.className = "media-item media-pdf";
@@ -570,11 +684,157 @@ if ($existingResult) {
         input.click();
     });
 
-    input.addEventListener("change", function () {
+    // ---- ZIP support: a code folder is packed into one .zip in the browser ----
+
+    var ZIP_TYPES = ["application/zip", "application/x-zip-compressed"];
+
+    function isZip(file) {
+        return ZIP_TYPES.indexOf(file.type) !== -1 || /\.zip$/i.test(file.name);
+    }
+
+    var crcTable = (function () {
+
+        var table = [], c, n, k;
+
+        for (n = 0; n < 256; n++) {
+
+            c = n;
+
+            for (k = 0; k < 8; k++) {
+                c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+            }
+
+            table[n] = c >>> 0;
+        }
+
+        return table;
+    })();
+
+    function crc32(bytes) {
+
+        var c = 0xFFFFFFFF;
+
+        for (var i = 0; i < bytes.length; i++) {
+            c = crcTable[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+        }
+
+        return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+
+    // entries: [{ name: "folder/file.php", data: Uint8Array }]  (stored, not compressed)
+    function buildZip(entries) {
+
+        var encoder = new TextEncoder();
+        var parts = [];
+        var central = [];
+        var offset = 0;
+        var centralSize = 0;
+
+        entries.forEach(function (entry) {
+
+            var nameBytes = encoder.encode(entry.name);
+            var crc = crc32(entry.data);
+            var size = entry.data.length;
+
+            var local = new Uint8Array(30 + nameBytes.length);
+            var lv = new DataView(local.buffer);
+
+            lv.setUint32(0, 0x04034b50, true);
+            lv.setUint16(4, 20, true);
+            lv.setUint16(6, 0x0800, true);
+            lv.setUint16(8, 0, true);
+            lv.setUint16(10, 0, true);
+            lv.setUint16(12, 0x21, true);
+            lv.setUint32(14, crc, true);
+            lv.setUint32(18, size, true);
+            lv.setUint32(22, size, true);
+            lv.setUint16(26, nameBytes.length, true);
+            lv.setUint16(28, 0, true);
+            local.set(nameBytes, 30);
+
+            var head = new Uint8Array(46 + nameBytes.length);
+            var hv = new DataView(head.buffer);
+
+            hv.setUint32(0, 0x02014b50, true);
+            hv.setUint16(4, 20, true);
+            hv.setUint16(6, 20, true);
+            hv.setUint16(8, 0x0800, true);
+            hv.setUint16(10, 0, true);
+            hv.setUint16(12, 0, true);
+            hv.setUint16(14, 0x21, true);
+            hv.setUint32(16, crc, true);
+            hv.setUint32(20, size, true);
+            hv.setUint32(24, size, true);
+            hv.setUint16(28, nameBytes.length, true);
+            hv.setUint16(30, 0, true);
+            hv.setUint16(32, 0, true);
+            hv.setUint16(34, 0, true);
+            hv.setUint16(36, 0, true);
+            hv.setUint32(38, 0, true);
+            hv.setUint32(42, offset, true);
+            head.set(nameBytes, 46);
+
+            parts.push(local, entry.data);
+            central.push(head);
+
+            offset += local.length + size;
+            centralSize += head.length;
+        });
+
+        var end = new Uint8Array(22);
+        var ev = new DataView(end.buffer);
+
+        ev.setUint32(0, 0x06054b50, true);
+        ev.setUint16(4, 0, true);
+        ev.setUint16(6, 0, true);
+        ev.setUint16(8, entries.length, true);
+        ev.setUint16(10, entries.length, true);
+        ev.setUint32(12, centralSize, true);
+        ev.setUint32(16, offset, true);
+        ev.setUint16(20, 0, true);
+
+        return new Blob(parts.concat(central, [end]), { type: "application/zip" });
+    }
+
+    // packs a chosen folder into one File called "<folder name>.zip"
+    function zipFolder(files) {
+
+        var total = files.reduce(function (sum, f) { return sum + f.size; }, 0);
+
+        if (total > MAX_BYTES) {
+            alert("That folder is larger than 25 MB, so it can't be added as a ZIP.");
+            return Promise.resolve(null);
+        }
+
+        return Promise.all(files.map(function (f) {
+            return f.arrayBuffer().then(function (buffer) {
+                return { name: f.webkitRelativePath || f.name, data: new Uint8Array(buffer) };
+            });
+        })).then(function (entries) {
+
+            var root = (files[0].webkitRelativePath || "folder").split("/")[0] || "folder";
+
+            return new File([buildZip(entries)], root + ".zip", {
+                type: "application/zip",
+                lastModified: Date.now()
+            });
+        });
+    }
+
+    var folderInput = document.getElementById("folder_input");
+    var folderButton = document.getElementById("folder_add");
+
+    var SUPPORTED = [
+        "image/jpeg", "image/png", "image/gif", "image/webp",
+        "video/mp4", "video/webm", "application/pdf"
+    ].concat(ZIP_TYPES);
+
+    // adds files to the list, skipping duplicates and anything too big or over the limit
+    function addFiles(files) {
 
         var problem = "";
 
-        Array.prototype.forEach.call(input.files, function (file) {
+        Array.prototype.forEach.call(files, function (file) {
 
             var duplicate = Array.prototype.some.call(chosen.files, function (c) {
                 return sameFile(c, file);
@@ -598,6 +858,108 @@ if ($existingResult) {
 
         if (problem !== "") {
             alert(problem);
+        }
+    }
+
+    input.addEventListener("change", function () {
+        addFiles(input.files);
+    });
+
+    folderButton.addEventListener("click", function () {
+        folderInput.click();
+    });
+
+    // a chosen folder: photos/videos/PDFs are added as they are,
+    // code or other files are packed into one ZIP download
+    folderInput.addEventListener("change", function () {
+
+        var all = Array.prototype.slice.call(folderInput.files);
+
+        folderInput.value = "";
+
+        var files = all.filter(function (f) {
+            return !/(^|\/)(\.git|node_modules)\//.test(f.webkitRelativePath || f.name);
+        });
+
+        if (files.length === 0) {
+            alert("That folder is empty.");
+            return;
+        }
+
+        var media = files.filter(function (f) {
+            return SUPPORTED.indexOf(f.type) !== -1;
+        });
+
+        var asZip = false;
+
+        if (media.length === 0) {
+
+            asZip = true;
+
+        } else if (media.length < files.length) {
+
+            asZip = confirm(
+                "This folder has other files besides photos, videos and PDFs.\n\n" +
+                "OK = add the whole folder as one ZIP download\n" +
+                "Cancel = add only the photos, videos and PDFs"
+            );
+        }
+
+        if (!asZip) {
+            addFiles(media);
+            return;
+        }
+
+        zipFolder(files).then(function (zipFile) {
+            if (zipFile) {
+                addFiles([zipFile]);
+            }
+        });
+    });
+
+})();
+</script>
+
+<script>
+(function () {
+
+    var existing = document.getElementById("media_existing");
+    var form = document.querySelector("form");
+
+    if (!existing) {
+        return;
+    }
+
+    // marks a saved file for removal; it is deleted when the project is updated
+    existing.addEventListener("click", function (event) {
+
+        var button = event.target.closest(".media-remove");
+
+        if (!button) {
+            return;
+        }
+
+        var item = button.closest(".media-preview");
+
+        var hidden = document.createElement("input");
+        hidden.type = "hidden";
+        hidden.name = "remove_media[]";
+        hidden.value = item.getAttribute("data-id");
+
+        form.appendChild(hidden);
+
+        var big = document.querySelector('#media_front [data-id="' + item.getAttribute("data-id") + '"]');
+
+        if (big) {
+            big.remove();
+        }
+
+        document.dispatchEvent(new Event("mediachange"));
+
+        item.remove();
+
+        if (existing.children.length === 0) {
+            existing.remove();
         }
     });
 

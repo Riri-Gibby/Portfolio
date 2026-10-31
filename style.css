@@ -1724,7 +1724,8 @@ tr:hover td {
 .existing-card .preview-empty {
     position: relative;
     inset: auto;
-    height: 100%;
+    width: 100%;
+    height: auto;
 }
 
 .existing-projects {
@@ -2119,4 +2120,46 @@ footer .socials a {
 
 .project-media:empty {
     display: none;
+}
+
+/* second round button (folder) next to the + button */
+.input-with-plus.has-folder input {
+    padding-right: 100px;
+}
+
+.input-plus.input-folder {
+    right: 50px;
+}
+
+/* ZIP download card (a project's code), same shape as the other previews */
+.project-media .media-item.media-zip {
+    grid-column: span 3;
+    aspect-ratio: 16 / 10;
+
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 20px;
+
+    color: var(--crimson-dark);
+    text-align: center;
+    text-decoration: none;
+}
+
+.media-zip span {
+    max-width: 100%;
+    overflow: hidden;
+    font-size: 20px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.media-zip em {
+    font-size: 13px;
+    font-style: normal;
+    font-weight: 600;
+    opacity: .8;
 }

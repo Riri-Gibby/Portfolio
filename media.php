@@ -20,6 +20,8 @@ function media_allowed(): array
         "video/mp4"       => ["mp4",  "video"],
         "video/webm"      => ["webm", "video"],
         "application/pdf" => ["pdf",  "file"],
+        "application/zip" => ["zip",  "archive"],
+        "application/x-zip-compressed" => ["zip", "archive"],
     ];
 }
 
@@ -152,7 +154,7 @@ function media_validate($input): string
         $mime = finfo_file($finfo, $file["tmp_name"]);
 
         if (!isset($allowed[$mime])) {
-            return "\"" . $name . "\" is not a supported file. Use JPG, PNG, GIF, WEBP, MP4, WEBM or PDF.";
+            return "\"" . $name . "\" is not a supported file. Use JPG, PNG, GIF, WEBP, MP4, WEBM, PDF or ZIP.";
         }
     }
 

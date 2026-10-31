@@ -261,6 +261,17 @@ if ($_SERVER["REQUEST_METHOD"] === "POST") {
                                             ></video>
                                         </div>
 
+                                    <?php elseif ($media["file_type"] === "archive"): ?>
+
+                                        <a
+                                            class="media-item media-zip"
+                                            href="<?= htmlspecialchars($mediaUrl) ?>"
+                                            download="<?= htmlspecialchars($media["original_name"]) ?>"
+                                        >
+                                            <span><?= htmlspecialchars(preg_replace('/\.zip$/i', '', $media["original_name"])) ?></span>
+                                            <em>Download code</em>
+                                        </a>
+
                                     <?php else: ?>
 
                                         <div class="media-item media-pdf">
